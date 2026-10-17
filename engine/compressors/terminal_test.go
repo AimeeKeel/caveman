@@ -211,3 +211,37 @@ func TestTerminalProgressRedrawStillCollapsesWithoutLF(t *testing.T) {
 		t.Errorf("final progress state lost: %q", out)
 	}
 }
+
+// The collapse decision is all or nothing per line. Dropping only the segments
+// the redundancy gate judges redundant reintroduced #1294 at a smaller scale:
+// digit masking makes two numbered records one class, and a line has nowhere to
+// put a marker saying one went missing.
+func TestTerminalCRNumberedRecordsAllSurvive(t *testing.T) {
+	in := []byte("Report\rTotal: 10\rTotal: 20\rSignature\r")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		return // pass-through loses nothing
+	}
+	for _, want := range []string{"Total: 10", "Total: 20"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("numbered record %q dropped with no marker: %q", want, out)
+		}
+	}
+}
+
+// Compress strips ANSI only after collapsing, so the segments have to be
+// compared by their visible text. Judging the raw bytes let a frame that merely
+// gained a color read as new content and kept the stale frame beside it.
+func TestTerminalColoredFinalFrameCollapses(t *testing.T) {
+	in := []byte("Downloading 10%\r\x1b[32mDownloading 100%\x1b[0m\n")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		t.Fatal("expected a recolored progress redraw to collapse")
+	}
+	if bytes.Contains(out, []byte("10%")) {
+		t.Errorf("stale progress frame survived a recolored redraw: %q", out)
+	}
+	if !bytes.Contains(out, []byte("Downloading 100%")) {
+		t.Errorf("final progress state lost: %q", out)
+	}
+}
