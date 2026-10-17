@@ -93,28 +93,59 @@ func (c *terminalCompressor) Compress(input []byte) ([]byte, bool) {
 	return result, true
 }
 
-// collapseCarriageReturns rewrites each physical line to its final redraw state.
+// collapseCarriageReturns rewrites a physical line to its final redraw state.
 // A bare \r rewinds the cursor to the start of the line, so a progress bar that
 // reprints "10%\r20%\r100% done" was only ever showing "100% done" — the earlier
-// frames are visual history, not content. It keeps the last non-empty \r segment.
+// frames are visual history, not content.
+//
+// But a \r is only a redraw when the frame it overwrote said the same thing. The
+// same byte terminates lines in a classic-Mac document and turns up as a paste
+// artifact in ordinary text, and there the overwritten segments ARE the content:
+// keeping only the last non-empty one collapsed an 84-byte CR-terminated report
+// to its signature line and rewrote "Hello \rWorld" to "World", both with ok=true
+// and no marker (#1294). Detect now withholds the bare-CR classification from
+// LF-less payloads, but an ANSI escape is conclusive for it and `caveman shrink`
+// forces this compressor outright, so the guard has to live here.
+//
+// So the segments go through keepNonRedundant, the same gate every unit-dropping
+// compressor in this package uses to separate eliding repetition from truncating
+// a document. A redraw's frames share a digit-masked class and still collapse to
+// the final one; distinct segments all survive, and rejoining them reproduces the
+// input, so Compress's not-smaller check passes the payload through and claims
+// nothing — the honest zero.
 func collapseCarriageReturns(b []byte) []byte {
 	if !bytes.Contains(b, []byte("\r")) {
 		return b
 	}
-	lines := bytes.Split(b, []byte("\n"))
-	for i, ln := range lines {
-		if !bytes.Contains(ln, []byte("\r")) {
-			continue
+	segs := bytes.Split(b, []byte("\r"))
+	// The last non-empty segment is the frame left on screen. Seed the gate with
+	// it so the earlier frames elide against what the user actually saw.
+	last := -1
+	for i, seg := range segs {
+		if len(seg) > 0 {
+			last = i
 		}
-		chosen := []byte(nil)
-		for _, seg := range bytes.Split(ln, []byte("\r")) {
-			if len(seg) > 0 {
-				chosen = seg
-			}
-		}
-		lines[i] = chosen
 	}
-	return bytes.Join(lines, []byte("\n"))
+	if last < 0 {
+		return b // nothing but carriage returns; no visible state to choose
+	}
+	keep := make([]bool, len(segs))
+	keep[last] = true
+	keepNonRedundant(segs, keep)
+
+	out := make([][]byte, 0, len(segs))
+	for i, seg := range segs {
+		if keep[i] && len(seg) > 0 {
+			out = append(out, seg)
+		}
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	// More than one segment carried content of its own: this was a line
+	// terminator or a paste artifact, not a redraw. Put the \r back between them
+	// rather than inventing an LF the document never had.
+	return bytes.Join(out, []byte("\r"))
 }
 
 // elideMiddle keeps the head, the tail, and every signal-bearing line, collapsing
