@@ -170,7 +170,10 @@ func TestPiSessionSourceHonorsRelocatedSessionsDirs(t *testing.T) {
 		}
 		paths := make([]string, 0, len(refs))
 		for _, ref := range refs {
-			paths = append(paths, ref.relPath)
+			// relPath is OS-native (filepath.Rel); consumers that need slash
+			// semantics normalize at the point of use, as claudeRepoFromRelPath
+			// and source_opencode_test do. Windows reported backslashes here.
+			paths = append(paths, filepath.ToSlash(ref.relPath))
 		}
 		sort.Strings(paths)
 		return paths
@@ -248,7 +251,7 @@ func TestLearnSessionSourcesUsesTheRelocatedPiSessionsDir(t *testing.T) {
 		t.Fatal("learnSessionSources() has no pi source")
 	}
 	refs, _ := pi.discover(nil)
-	if len(refs) != 1 || refs[0].relPath != "--repo-pi--/20260816_00.jsonl" {
+	if len(refs) != 1 || filepath.ToSlash(refs[0].relPath) != "--repo-pi--/20260816_00.jsonl" {
 		t.Fatalf("the scanner's own pi source found %d session(s) under a relocated PI_CODING_AGENT_SESSION_DIR: %+v", len(refs), refs)
 	}
 }
