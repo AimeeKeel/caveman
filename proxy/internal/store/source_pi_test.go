@@ -218,6 +218,41 @@ func TestPiSessionSourceHonorsRelocatedSessionsDirs(t *testing.T) {
 	})
 }
 
+// The relocation tests above build the source directly, so every one of them
+// still passes if learnSessionSources() is left constructing the pi source from
+// a bare root — which is the only construction the real scanner performs. Pin
+// the wiring, not just the constructor.
+func TestLearnSessionSourcesUsesTheRelocatedPiSessionsDir(t *testing.T) {
+	base := t.TempDir()
+	sessionDir := filepath.Join(base, "relocated")
+	t.Setenv("CAVEMAN_PI_ROOT", "")
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", sessionDir)
+
+	path := filepath.Join(sessionDir, "--repo-pi--", "20260816_00.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"session","id":"s","timestamp":"2026-08-16T12:00:00Z","cwd":"/repo/pi"}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var pi sessionSource
+	for _, source := range learnSessionSources() {
+		if source.id() == "pi" {
+			pi = source
+		}
+	}
+	if pi == nil {
+		t.Fatal("learnSessionSources() has no pi source")
+	}
+	refs, _ := pi.discover(nil)
+	if len(refs) != 1 || refs[0].relPath != "--repo-pi--/20260816_00.jsonl" {
+		t.Fatalf("the scanner's own pi source found %d session(s) under a relocated PI_CODING_AGENT_SESSION_DIR: %+v", len(refs), refs)
+	}
+}
+
 func TestPiTaskSpawnsCountsOnlySpawnTools(t *testing.T) {
 	msg := map[string]any{"content": []any{
 		map[string]any{"type": "toolCall", "id": "1", "name": "read"},
