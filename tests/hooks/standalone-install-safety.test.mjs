@@ -104,7 +104,8 @@ for (const surface of surfaces) {
     const entry = { type: 'command', command: `node ${join(item.hooks, 'caveman-activate.js')}` };
     const body = JSON.stringify({ model: 'opus', hooks: { SessionStart: [{ hooks: [entry] }] } });
     writeFileSync(item.settings, `// my model choice\n${body}\n`);
-    assert.equal(run(surface, item, 'uninstall').status, 0);
+    const jsonc = run(surface, item, 'uninstall');
+    assert.equal(jsonc.status, 0, jsonc.stdout + jsonc.stderr);
     assert.match(readFileSync(`${item.settings}.bak`, 'utf8'), /my model choice/);
     rmSync(`${item.settings}.bak`);
     writeFileSync(item.settings, body);

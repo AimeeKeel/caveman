@@ -181,13 +181,30 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
         $env:CAVEMAN_BAK = ($Settings -replace '\\', '/') + '.bak'
         $BackupIsPlainJson = $false
         if ($BackupMade -and (Test-Path "$Settings.bak")) {
-            # $LASTEXITCODE is 0 from the rewrite above, and a node that cannot be
-            # launched at all leaves it untouched — which would read as "plain JSON"
-            # and delete the backup. Fail safe: only an exit code node itself wrote
-            # may clear it.
-            $global:LASTEXITCODE = 1
-            node -e "JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_BAK, 'utf8'))" 2>$null
-            $BackupIsPlainJson = ($LASTEXITCODE -eq 0)
+            # Windows PowerShell 5.1 turns a native command's stderr into error
+            # records, and this script runs under $ErrorActionPreference = "Stop",
+            # which makes them TERMINATING. The probe's failure is its answer, not
+            # an error: a JSONC backup makes JSON.parse throw, node prints the
+            # stack trace to stderr, and the script died there — before the
+            # explicit `exit 0` below could set a status, which is why neither
+            # that nor clearing $LASTEXITCODE moved the powershell.exe lane. pwsh
+            # 7 does not raise on native stderr, so only 5.1 ever saw it. Scope
+            # the preference around the probe; the rest of the script keeps Stop.
+            $PreviousEAP = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                # $LASTEXITCODE is 0 from the rewrite above, and a node that cannot be
+                # launched at all leaves it untouched — which would read as "plain JSON"
+                # and delete the backup. Fail safe: only an exit code node itself wrote
+                # may clear it.
+                $global:LASTEXITCODE = 1
+                node -e "JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_BAK, 'utf8'))" 2>$null
+                $BackupIsPlainJson = ($LASTEXITCODE -eq 0)
+            } catch {
+                $BackupIsPlainJson = $false  # unreadable probe: keep the backup
+            } finally {
+                $ErrorActionPreference = $PreviousEAP
+            }
             # The probe is a predicate, not an operation: a JSONC backup makes it
             # exit 1 on a perfectly successful uninstall. Its result is consumed
             # above, so keep the variable honest for anything that reads it later.
