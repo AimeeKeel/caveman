@@ -189,11 +189,12 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
             node -e "JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_BAK, 'utf8'))" 2>$null
             $BackupIsPlainJson = ($LASTEXITCODE -eq 0)
             # The probe is a predicate, not an operation: a JSONC backup makes it
-            # exit 1 on a perfectly successful uninstall. Windows PowerShell 5.1
-            # ends a -File script with $LASTEXITCODE from the last native command,
-            # so leaving the probe's code in place made uninstall report failure
-            # (pwsh 7 exits 0 instead, which is why only the powershell.exe lane
-            # caught it). Its result is consumed above; clear it here.
+            # exit 1 on a perfectly successful uninstall. Its result is consumed
+            # above, so keep the variable honest for anything that reads it later.
+            # This alone does NOT fix the script's exit status: assigning
+            # $LASTEXITCODE updates the variable, not the engine's record of the
+            # last native command, which is what `powershell.exe -File` returns.
+            # The explicit `exit 0` at the end of this script is what does that.
             $global:LASTEXITCODE = 0
         }
         if ($BackupIsPlainJson) {
@@ -268,3 +269,12 @@ Write-Host "Other agents:"
 Write-Host "  npx skills remove JuliusBrussee/caveman -g  # Cursor, Windsurf, Cline, Copilot, etc."
 Write-Host "  claude plugin disable caveman   # Claude Code plugin"
 Write-Host "  gemini extensions uninstall caveman  # Gemini CLI"
+
+# Pin the success status. Every failure path above exits explicitly, so reaching
+# here means success -- but the .bak probe deliberately runs a node that exits 1
+# whenever the backup holds the comments the rewrite dropped, and Windows
+# PowerShell 5.1 (`powershell.exe -File`, still the default shell on Windows)
+# ends a script with the last native command's exit code. A fully successful
+# uninstall of a JSONC settings.json therefore reported failure. pwsh 7 exits 0
+# in the same position, which is why only the powershell.exe lane catches it.
+exit 0
