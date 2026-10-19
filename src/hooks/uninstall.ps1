@@ -181,6 +181,11 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
         $env:CAVEMAN_BAK = ($Settings -replace '\\', '/') + '.bak'
         $BackupIsPlainJson = $false
         if ($BackupMade -and (Test-Path "$Settings.bak")) {
+            # $LASTEXITCODE is 0 from the rewrite above, and a node that cannot be
+            # launched at all leaves it untouched — which would read as "plain JSON"
+            # and delete the backup. Fail safe: only an exit code node itself wrote
+            # may clear it.
+            $global:LASTEXITCODE = 1
             node -e "JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_BAK, 'utf8'))" 2>$null
             $BackupIsPlainJson = ($LASTEXITCODE -eq 0)
         }
