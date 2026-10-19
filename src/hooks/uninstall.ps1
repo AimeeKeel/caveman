@@ -188,6 +188,13 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
             $global:LASTEXITCODE = 1
             node -e "JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_BAK, 'utf8'))" 2>$null
             $BackupIsPlainJson = ($LASTEXITCODE -eq 0)
+            # The probe is a predicate, not an operation: a JSONC backup makes it
+            # exit 1 on a perfectly successful uninstall. Windows PowerShell 5.1
+            # ends a -File script with $LASTEXITCODE from the last native command,
+            # so leaving the probe's code in place made uninstall report failure
+            # (pwsh 7 exits 0 instead, which is why only the powershell.exe lane
+            # caught it). Its result is consumed above; clear it here.
+            $global:LASTEXITCODE = 0
         }
         if ($BackupIsPlainJson) {
             Remove-Item "$Settings.bak" -Force
