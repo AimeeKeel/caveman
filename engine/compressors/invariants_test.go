@@ -1085,6 +1085,10 @@ func TestInvariantNumberRefusesUnorderableLiterals(t *testing.T) {
 		{"9007199254740991", true, "2^53-1, the largest exactly-held integer"},
 		{"1.5e3", true, "exponent notation, granularity 100"},
 		{"1e20", true, "one significant digit at 1e20, granularity 1e20"},
+		{"1e+20", true, "a signed exponent parses the same way"},
+		{"1E-5", true, "upper-case negative exponent"},
+		{"1e308", true, "near the float64 maximum"},
+		{"1e-320", true, "subnormal, where the grid is still finer than the digit"},
 		{"0.000001", true, "small magnitude, fine granularity"},
 
 		// Refused: two adjacent literals at this precision can collide.
@@ -1096,6 +1100,10 @@ func TestInvariantNumberRefusesUnorderableLiterals(t *testing.T) {
 
 		// Refused: granularity is not readable off the literal.
 		{"0x1p60", false, "hex float"},
+		{"0X1P60", false, "hex float, upper case"},
+		{"1_000", false, "underscore digit groups: granularity unreadable"},
+		{"1e", false, "malformed exponent"},
+		{" 12", false, "ParseFloat refuses a leading space"},
 		{"NaN", false, "not finite"},
 		{"Inf", false, "not finite"},
 		{"1e400", false, "overflows to Inf"},
