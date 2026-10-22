@@ -59,7 +59,10 @@ test('framework peers are optional and unranged (Decision 2); tested releases, m
   assert.deepEqual(inspectFrameworkCompatibility('langchain').frameworks.map(check => check.package), ['langchain', '@langchain/core']);
   assert.deepEqual(inspectFrameworkCompatibility('langchain-core').frameworks.map(check => check.package), ['@langchain/core']);
   assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.137.0'), true, 'released 0.125-0.137 were tested');
-  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.138.0'), false, 'zero-major next minor may break APIs');
+  // Upstream closed the 0.x line at 0.137.0 by shipping 1.0.0, so this bound is the next major like every sibling's.
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '1.0.0'), true, '1.0.0 was tested');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '1.1.0'), true, '1.1.0 was tested');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '2.0.0'), false, 'the next major may break APIs');
   assert.equal(frameworkCompatible('openai', '7.12.0'), false, 'older patch than validated floor');
   assert.throws(() => inspectFrameworkCompatibility('typo'), /Unknown Caveman adapter/);
 });
