@@ -177,7 +177,9 @@ test('check-latest-in-range reads every TypeScript and Python range and flags on
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const entries = await ranges();
   assert.deepEqual(entries.filter(([registry]) => registry === 'npm').map(([, name]) => name), Object.keys(pkg.supportedFrameworkVersions));
-  assert.deepEqual(entries.find(([registry, name]) => registry === 'pypi' && name === 'anthropic'), ['pypi', 'anthropic', '1.0', '2']);
+  // Upper bound tracks _versions.py, which admitted the Anthropic Python SDK's
+  // 1.x line when upstream shipped it; ranges() reads that file, not this literal.
+  assert.deepEqual(entries.find(([registry, name]) => registry === 'pypi' && name === 'anthropic'), ['pypi', 'anthropic', '1.0', '3']);
   assert.ok(entries.some(([registry, name]) => registry === 'pypi' && name === 'autogen-ext'));
   const sample = [['npm', '@anthropic-ai/sdk', '0.124.0', '0.129'], ['pypi', 'openai', '2.20', '4'], ['npm', 'openai', '7.12.1', '8']];
   assert.deepEqual(drift(sample, { 'npm:@anthropic-ai/sdk': '0.128.0', 'pypi:openai': '3.9.1', 'npm:openai': '7.23.0' }), []);
