@@ -12,7 +12,7 @@ description: >
 
 > **Data leaves the machine.** Compression sends the file's full text to the model provider that `scripts/compress.py` is configured for: the `claude` CLI, the Anthropic API, or an OpenAI-compatible endpoint. Files whose names look like secrets (`.env`, `credentials`, `secrets`, `.netrc`, …) are refused before they are read. Don't compress a file the provider shouldn't see.
 
-Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`, but NOT beside the source file — it lives in an out-of-tree data dir (`$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>-<hash>/`, or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>-<hash>\` on Windows) so skill auto-loaders don't re-ingest it as a live file.
+Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`, but NOT beside the source file — it lives in an out-of-tree data dir (`$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>/`, or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>\` on Windows) so skill auto-loaders don't re-ingest it as a live file.
 
 ## Trigger
 
@@ -33,8 +33,8 @@ python3 -m scripts <absolute_filepath>
 - call Claude to compress
 - validate output (no tokens)
 - if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
-- validate the fixed output once more (one fix call at most)
-- if still failing: report error to user, leave original file untouched
+- retry up to 2 times
+- if still failing after 2 retries: report error to user, leave original file untouched
 
 4. Return result to user
 
