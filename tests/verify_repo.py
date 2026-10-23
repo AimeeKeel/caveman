@@ -676,6 +676,56 @@ def verify_python_text_io_encoding() -> None:
     print(f"{scanned} Python sources checked; all text IO passes an explicit encoding")
 
 
+def verify_test_entrypoints() -> None:
+    """Every unittest file must run its whole suite when invoked directly.
+
+    `python3 tests/test_x.py` executes the module top to bottom, so an
+    `if __name__ == "__main__": unittest.main()` block placed anywhere but the
+    end runs before the classes below it are defined -- those tests silently
+    never run, and the file still exits 0. A file with TestCase classes and no
+    guard at all is worse: it runs nothing and reports nothing. Both shapes
+    have shipped here, so this is a build check rather than a convention.
+    """
+    section("Test Entrypoints")
+
+    checked = 0
+    for path in sorted((ROOT / "tests").glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+        classes = [
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and any("TestCase" in ast.dump(base) for base in node.bases)
+        ]
+        if not classes:
+            continue
+        checked += 1
+
+        guards = [
+            node for node in tree.body
+            if isinstance(node, ast.If) and "__main__" in ast.dump(node.test)
+        ]
+        rel = path.relative_to(ROOT)
+        ensure(
+            guards,
+            f"{rel} defines TestCase classes but has no "
+            'if __name__ == "__main__": unittest.main() block, so running it '
+            "directly executes nothing and still exits 0",
+        )
+
+        guard_line = guards[0].lineno
+        stranded = [node.name for node in classes if node.lineno > guard_line]
+        ensure(
+            not stranded,
+            f"{rel}: unittest.main() at line {guard_line} runs before "
+            f"{len(stranded)} later TestCase class(es) are defined, so they "
+            f"never run on a direct invocation: {', '.join(stranded)}. "
+            "Move the __main__ block to the end of the file.",
+        )
+
+    print(f"Checked {checked} unittest files for a reachable entrypoint")
+
+
 def verify_compress_fixtures() -> None:
     section("Compress Fixtures")
     _, detect, validate = load_compress_modules()
@@ -1186,6 +1236,7 @@ def main() -> int:
         verify_powershell_static,
         verify_hidden_child_windows,
         verify_python_text_io_encoding,
+        verify_test_entrypoints,
         verify_compress_fixtures,
         verify_compress_cli,
         verify_hook_install_flow,

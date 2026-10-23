@@ -237,10 +237,6 @@ class TestInnerBacktickSpans(unittest.TestCase):
         validate_inline_codes(orig, comp, result)
         self.assertFalse(result.is_valid, result.errors)
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestIndentedCodeIsValidated(unittest.TestCase):
     """A 4-space-indented code block is code. It used to be prose to the
     validator: extract_code_blocks saw only fenced blocks, so "code blocks
@@ -327,3 +323,7 @@ class TestPreservationPromisesAreErrors(unittest.TestCase):
         orig = "# Hooks\n\nThe shared module lives at src/hooks/caveman-config.js and is required.\n"
         comp = "# Hooks\n\nShared module required.\n"
         self.assertFalse(self._validate(orig, comp).is_valid)
+
+
+if __name__ == "__main__":
+    unittest.main()
