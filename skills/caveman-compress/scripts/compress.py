@@ -998,23 +998,36 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
         print("❌ Refusing to compress: file is empty or whitespace-only.")
         return False
 
-    # Check if backup already exists to prevent accidental overwriting. The
-    # pre-#1351 location is checked too: an install that compressed this file
-    # before the backup key changed still has its original there, and running
-    # again would capture the already-compressed text as the new "original".
-    for existing, where in (
-        (backup_path, "backup"),
-        (legacy_backup_dir_for(filepath) / (filepath.stem + ".original.md"), "pre-4.0.2 backup"),
-    ):
-        if existing.exists():
-            print(f"⚠️ {where.capitalize()} already exists: {existing}")
-            print(f"   It holds the uncompressed original of a previous run of {filepath.name}.")
-            print("Aborting to prevent data loss.")
-            print(f"   To restore it:   cp {existing} {filepath}")
-            print("   To re-compress from scratch, move that file somewhere safe first —")
-            print("   deleting it and rerunning would store the ALREADY COMPRESSED text")
-            print("   as the new original, and the uncompressed version would be gone.")
-            return False
+    # Refuse when a backup already exists, so a rerun cannot capture this file's
+    # already-compressed text as the new "original".
+    if backup_path.exists():
+        print(f"⚠️ Backup already exists: {backup_path}")
+        print(f"   It holds the uncompressed original of an earlier run on {filepath.name}.")
+        print("Aborting to prevent data loss.")
+        print(f"   To restore it:     cp '{backup_path}' '{filepath}'")
+        print(f"   To start over:     mv '{backup_path}' '{backup_path}.kept'")
+        print("   Do not just delete it — rerunning would then store the ALREADY")
+        print("   COMPRESSED text as the new original, losing the uncompressed version.")
+        return False
+
+    # The pre-#1351 location is checked too: an install that compressed this file
+    # before the backup key changed still has its only original there. That path
+    # was keyed on the parent directory's NAME alone, so it was shared by every
+    # same-named file on the machine — this backup may well belong to a DIFFERENT
+    # project, which is exactly the bug that produced it. So: refuse, name the
+    # ambiguity, and never read, move or delete it on the user's behalf.
+    legacy_backup = legacy_backup_dir_for(filepath) / (filepath.stem + ".original.md")
+    if legacy_backup.exists():
+        print(f"⚠️ A backup from an older caveman-compress exists: {legacy_backup}")
+        print("   Older versions keyed backups on the parent directory's name only,")
+        print(f"   so that file is the original of SOME {filepath.parent.name}/{filepath.name}")
+        print("   on this machine — possibly this one, possibly another project's.")
+        print("Aborting to prevent data loss.")
+        print("   Check its contents, then move it out of the way to proceed:")
+        print(f"     mv '{legacy_backup}' '{legacy_backup}.kept'")
+        print("   Backups written from now on are keyed on the file's full path and")
+        print(f"   will land in {backup_path.parent}")
+        return False
 
     # Split YAML frontmatter off before compression. LLMs tend to strip or
     # rewrite frontmatter despite preserve-structure rules; we keep it verbatim

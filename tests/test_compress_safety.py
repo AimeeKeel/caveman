@@ -116,7 +116,9 @@ class CompressSafetyTests(unittest.TestCase):
             legacy.parent.mkdir(parents=True, exist_ok=True)
             legacy.write_text("# Notes\n\nThe long uncompressed original.\n", encoding="utf-8")
 
-            with mock.patch.object(compress_mod, "call_claude") as call:
+            out = io.StringIO()
+            with mock.patch.object(compress_mod, "call_claude") as call, \
+                 contextlib.redirect_stdout(out):
                 ok = compress_mod.compress_file(path)
 
             self.assertFalse(ok)
@@ -126,6 +128,12 @@ class CompressSafetyTests(unittest.TestCase):
             self.assertFalse(
                 (compress_mod.backup_dir_for(path.resolve()) / "task.original.md").exists()
             )
+            message = out.getvalue()
+            # The old location was shared by every same-named file on the machine,
+            # so the message must flag that and must NOT offer to copy it over the
+            # live file — that backup may be a different project's original.
+            self.assertIn("possibly another project's", message)
+            self.assertNotIn(f"cp '{legacy}'", message)
 
     def test_empty_input_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
