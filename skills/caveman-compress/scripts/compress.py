@@ -106,8 +106,31 @@ def _state_base_dir(kind: str) -> Path:
 
 
 def backup_dir_for(filepath: Path) -> Path:
-    """Out-of-tree backup dir for filepath, keyed by its parent dir name — kept outside the source tree so skill auto-loaders don't re-ingest `.original.md` backups as live files."""
-    return _state_base_dir("backups") / filepath.parent.name
+    """Out-of-tree backup dir for filepath — kept outside the source tree so skill
+    auto-loaders don't re-ingest `.original.md` backups as live files.
+
+    Keyed on the file's RESOLVED PARENT PATH, not just the parent's name. Keying
+    on the name alone meant every project's `.claude/CLAUDE.md` shared one slot
+    (issue #1351): the second project aborted on the first project's backup, and
+    the abort's own advice — remove the backup and rerun — deleted another
+    project's only uncompressed original. The readable parent name is kept as a
+    prefix so the directory is still recognisable by eye; the digest is what
+    makes it unique. Resolving here (rather than trusting callers) keeps two
+    spellings of one file in a single slot.
+    """
+    parent = Path(filepath).resolve().parent
+    digest = hashlib.sha256(str(parent).encode("utf-8")).hexdigest()[:12]
+    # A file directly under the filesystem root has an empty parent name.
+    return _state_base_dir("backups") / f"{parent.name or 'root'}-{digest}"
+
+
+def legacy_backup_dir_for(filepath: Path) -> Path:
+    """The pre-#1351 backup dir (parent name only). Read-only: `_compress_file_locked`
+    still refuses to run when a backup sits here, so an install that compressed a
+    file before the key changed cannot silently re-backup its own compressed output
+    as the new "original". Never written to, and never deleted — the file it holds
+    may belong to a different project entirely, which is the bug that produced it."""
+    return _state_base_dir("backups") / Path(filepath).resolve().parent.name
 
 
 LOCK_WAIT_SECONDS = 900  # must outlast a legitimate holder's worst-case run (up to MAX_RETRIES+1 Claude calls against the 500KB size cap) or a healthy wait misreads as a stuck lock
@@ -975,12 +998,23 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
         print("❌ Refusing to compress: file is empty or whitespace-only.")
         return False
 
-    # Check if backup already exists to prevent accidental overwriting
-    if backup_path.exists():
-        print(f"⚠️ Backup file already exists: {backup_path}")
-        print("The original backup may contain important content.")
-        print("Aborting to prevent data loss. Please remove or rename the backup file if you want to proceed.")
-        return False
+    # Check if backup already exists to prevent accidental overwriting. The
+    # pre-#1351 location is checked too: an install that compressed this file
+    # before the backup key changed still has its original there, and running
+    # again would capture the already-compressed text as the new "original".
+    for existing, where in (
+        (backup_path, "backup"),
+        (legacy_backup_dir_for(filepath) / (filepath.stem + ".original.md"), "pre-4.0.2 backup"),
+    ):
+        if existing.exists():
+            print(f"⚠️ {where.capitalize()} already exists: {existing}")
+            print(f"   It holds the uncompressed original of a previous run of {filepath.name}.")
+            print("Aborting to prevent data loss.")
+            print(f"   To restore it:   cp {existing} {filepath}")
+            print("   To re-compress from scratch, move that file somewhere safe first —")
+            print("   deleting it and rerunning would store the ALREADY COMPRESSED text")
+            print("   as the new original, and the uncompressed version would be gone.")
+            return False
 
     # Split YAML frontmatter off before compression. LLMs tend to strip or
     # rewrite frontmatter despite preserve-structure rules; we keep it verbatim

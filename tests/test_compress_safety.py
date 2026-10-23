@@ -73,6 +73,60 @@ class CompressSafetyTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8", newline="")
         return path
 
+    def test_same_filename_in_two_projects_each_keep_their_own_original(self):
+        """#1351: both projects' .claude/CLAUDE.md mapped to one backup slot, so the
+        second run aborted on the first project's backup — and the abort told the
+        user to delete it, destroying the other project's only uncompressed copy."""
+        body = "# Notes\n\n" + "Some long natural language prose to compress here. " * 10 + "\n"
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            paths = []
+            for project in ("home", "repo"):
+                claude_dir = Path(tmp) / project / ".claude"
+                claude_dir.mkdir(parents=True)
+                path = claude_dir / "CLAUDE.md"
+                path.write_text(body + f"Project {project}.\n", encoding="utf-8", newline="")
+                paths.append(path)
+
+            for path in paths:
+                with mock.patch.object(compress_mod, "call_claude", return_value="# Notes\n\nShort.\n"), \
+                     mock.patch.object(compress_mod, "validate") as v:
+                    v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                    self.assertTrue(compress_mod.compress_file(path), f"{path} was refused")
+
+            backups = [
+                compress_mod.backup_dir_for(p.resolve()) / "CLAUDE.original.md" for p in paths
+            ]
+            self.assertNotEqual(backups[0], backups[1])
+            for path, backup in zip(paths, backups):
+                self.assertTrue(backup.exists())
+                # Each backup still holds ITS OWN project's uncompressed text.
+                self.assertIn(f"Project {path.parent.parent.name}.", backup.read_text(encoding="utf-8"))
+
+    def test_pre_rekey_backup_still_blocks_a_rerun(self):
+        """The #1351 rekey must not strand an existing backup: a file compressed
+        before the key changed has its only original under the old parent-name
+        path, and rerunning there would capture the compressed text as the new
+        'original'. The old location is refused, never overwritten or deleted."""
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            compressed_now = "# Notes\n\nShort.\n"
+            path = self._file_with(Path(tmp), compressed_now)
+            legacy = compress_mod.legacy_backup_dir_for(path.resolve()) / "task.original.md"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text("# Notes\n\nThe long uncompressed original.\n", encoding="utf-8")
+
+            with mock.patch.object(compress_mod, "call_claude") as call:
+                ok = compress_mod.compress_file(path)
+
+            self.assertFalse(ok)
+            call.assert_not_called()
+            self.assertEqual(path.read_text(encoding="utf-8"), compressed_now)
+            self.assertIn("The long uncompressed original.", legacy.read_text(encoding="utf-8"))
+            self.assertFalse(
+                (compress_mod.backup_dir_for(path.resolve()) / "task.original.md").exists()
+            )
+
     def test_empty_input_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._file_with(Path(tmp), "")
