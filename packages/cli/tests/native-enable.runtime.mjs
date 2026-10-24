@@ -3159,3 +3159,21 @@ test("the claude shortcut does not fall back to wrap on a foreign-route conflict
   assert.doesNotMatch(out.stderr, /using session-only wrap for this run/);
   assert.equal(readFileSync(settingsPath, "utf8"), original);
 });
+
+// Both Claude routing doors — the persistent native install and the ephemeral
+// `wrap` env — restore tool search from one constant (#1361). A literal at
+// either site would let the two doors drift, and only the native one is covered
+// by a behavioural test, so pin the shared constant and both readers here.
+test("both Claude routing doors restore tool search from the shared constant", () => {
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "index.ts"), "utf8");
+  const declarations = source.match(/^const TOOL_SEARCH_DEFAULT = .*$/gm) ?? [];
+  assert.equal(declarations.length, 1, `expected one TOOL_SEARCH_DEFAULT declaration, got ${declarations.length}`);
+  // Claude Code's own default with the variable unset is always-on tool search;
+  // restoring the base URL must not silently move the user to threshold mode.
+  assert.equal(declarations[0], 'const TOOL_SEARCH_DEFAULT = "true";');
+  const writes = source.match(/ENABLE_TOOL_SEARCH = [^;\n]+/g) ?? [];
+  assert.equal(writes.length, 2, `expected the native-enable and wrap writes, got ${writes.length}: ${writes}`);
+  for (const write of writes) {
+    assert.match(write, /TOOL_SEARCH_DEFAULT/, `a routing door writes a literal instead of the constant: ${write}`);
+  }
+});
