@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, copyFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 function fixture(t, code, failures) {
-  const dir = mkdtempSync(join(tmpdir(), "caveman-wedge-lock-"));
+  const dir = mkdtempSync(join(tmpdir(), "caveman-wedge-lock-#-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cli = join(dir, "packages", "cli");
   const target = join(dir, "packages", "shared", "binary-installer");
@@ -27,8 +27,9 @@ const rename=fs.renameSync;let calls=0;
 fs.renameSync=(from,to)=>{calls++;fs.writeFileSync(${JSON.stringify(attempts)},String(calls));
 if(calls<=${failures})throw Object.assign(new Error('injected rename lock'),{code:${JSON.stringify(code)}});
 return rename(from,to);};syncBuiltinESMExports();`);
-  const result = spawnSync(process.execPath, ["--import", preload, join(cli, "scripts", "gen-wedge-installer.mjs")], { cwd: dir, encoding: "utf8", timeout: 10_000, env: { PATH: process.env.PATH, HOME: dir, USERPROFILE: dir, TMPDIR: dir, TEMP: dir, TMP: dir } });
+  const result = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, join(cli, "scripts", "gen-wedge-installer.mjs")], { cwd: dir, encoding: "utf8", timeout: 10_000, env: { PATH: process.env.PATH, HOME: dir, USERPROFILE: dir, TMPDIR: dir, TEMP: dir, TMP: dir } });
   assert.equal(result.error, undefined, result.error?.message);
+  assert.ok(existsSync(attempts), `preload did not reach renameSync: ${result.stderr}`);
   return { result, output: readFileSync(output, "utf8"), calls: Number(readFileSync(attempts, "utf8")), leftovers: readdirSync(target).filter((name) => name.endsWith(".tmp")) };
 }
 
