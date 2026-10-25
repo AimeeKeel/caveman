@@ -10160,6 +10160,20 @@ function insertHermesNativeListEntry(
   return whole.join("\n");
 }
 
+// Hermes provider ids that carry their OWN OAuth credential and the ChatGPT
+// Responses transport. Rewriting one to the generic `custom` provider drops
+// both: the installed resolver then picks chat_completions with
+// `no-key-required` and every request 401s (#1391). These keep their provider
+// and ride the proxy's existing ChatGPT handler instead.
+const HERMES_CHATGPT_OAUTH_PROVIDERS = new Set(["openai-codex"]);
+
+// `/chatgpt` is the ChatGPT mux handler, which takes its suffix verbatim — the
+// Responses operation is `/chatgpt/responses`, so this must NOT gain a "/v1".
+// Same reasoning as codexGatewayBase().
+function hermesGatewayBase(gw: string, keptProvider: string | null): string {
+  return appendUrlPath(gw, keptProvider && HERMES_CHATGPT_OAUTH_PROVIDERS.has(keptProvider) ? "/chatgpt" : "/w/hermes/v1");
+}
+
 function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { text: string; owned: Record<string, unknown> } {
   for (const marker of [HERMES_NATIVE_ROUTE_BEGIN, HERMES_NATIVE_ROUTE_END, HERMES_NATIVE_PLUGIN_BEGIN, HERMES_NATIVE_PLUGIN_END, HERMES_NATIVE_MCP_BEGIN, HERMES_NATIVE_MCP_END]) {
     if (source.includes(marker)) throw new Error("existing Hermes Caveman native block is unjournaled; run `caveman doctor hermes`");
@@ -10183,10 +10197,17 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   }
   const insertAt = routeIndexes[0] ?? model.start + 1;
   for (const index of [...routeIndexes].sort((a, b) => b - a)) lines.splice(index, 1);
+  // A named OAuth provider selects a credential and a transport that the
+  // generic custom route cannot carry, so keep it and route to the handler
+  // that speaks it. `api_mode` is not a route key, so it already survives.
+  const providerLine = previousRouteLines.find((line) => /^  provider:/.test(line));
+  const previousProvider = providerLine ? configValue(providerLine.slice(providerLine.indexOf(":") + 1)) : undefined;
+  const keptProvider = previousProvider && HERMES_CHATGPT_OAUTH_PROVIDERS.has(previousProvider) ? previousProvider : null;
+  const route = hermesGatewayBase(gw, keptProvider);
   const routeBlock = [
     `  ${HERMES_NATIVE_ROUTE_BEGIN}`,
-    '  provider: "custom"',
-    `  base_url: ${yamlQuote(appendUrlPath(gw, "/w/hermes/v1"))}`,
+    keptProvider ? `  provider: ${keptProvider}` : '  provider: "custom"',
+    `  base_url: ${yamlQuote(route)}`,
     `  ${HERMES_NATIVE_ROUTE_END}`,
   ];
   lines.splice(insertAt, 0, ...routeBlock);
@@ -10228,7 +10249,10 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   return {
     text: yamlText(lines),
     owned: {
-      route: appendUrlPath(gw, "/w/hermes/v1"),
+      route,
+      // Absent in journals written before #1391; doctor reads that as the
+      // generic route, which is what those installs actually carry.
+      provider: keptProvider ?? "custom",
       route_block: routeBlock.join("\n"),
       previous_route_lines: previousRouteLines,
       plugin_block: pluginBlock,
@@ -11413,11 +11437,16 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const coreResolution = runtimeConfig.resolution.values["think.core"];
   const coreConfigured = coreResolution.value === true;
   const mcp = probeMcpBinary();
-  const expectedRoute = agent === "codex"
-    ? codexGatewayBase(gatewayURL(), detectCodexWrapAuthMode() === "subscription")
-    : appendUrlPath(gatewayURL(), agent === "claude" ? "/w/claude" : agent === "hermes" ? "/w/hermes/v1" : agent === "gemini" ? "/w/gemini" : agent === "pi" ? "/w/pi" : "/w/aider/openai/v1");
   const routeKind: NativeMutation["kind"] = agent === "claude" ? "claude-settings" : agent === "codex" ? "codex-config" : agent === "hermes" ? "hermes-config" : agent === "gemini" ? "gemini-env" : agent === "opencode" ? "opencode-config" : agent === "pi" ? "pi-extension" : "aider-config";
   const routeOperation = journal?.operations.find((operation) => operation.kind === routeKind);
+  // Hermes has two routes: the generic one, and `/chatgpt` for an install that
+  // kept a named OAuth provider. The journal records which, so doctor expects
+  // the route this install actually wrote rather than one of them always.
+  const expectedRoute = agent === "codex"
+    ? codexGatewayBase(gatewayURL(), detectCodexWrapAuthMode() === "subscription")
+    : agent === "hermes"
+      ? hermesGatewayBase(gatewayURL(), typeof routeOperation?.owned?.provider === "string" ? routeOperation.owned.provider : null)
+      : appendUrlPath(gatewayURL(), agent === "claude" ? "/w/claude" : agent === "gemini" ? "/w/gemini" : agent === "pi" ? "/w/pi" : "/w/aider/openai/v1");
   // Pi's artifact encodes no route: the extension resolves the gateway at
   // runtime through the same env → config → default chain as gatewayURL(), so
   // route drift between enable and now cannot happen. What CAN drift is the

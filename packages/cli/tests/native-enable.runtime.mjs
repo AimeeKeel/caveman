@@ -1580,6 +1580,7 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
     "model:",
     "  default: gpt-5.5",
     "  provider: openai-codex",
+    "  api_mode: codex_responses",
     "  base_url: https://chatgpt.com/backend-api/codex",
     "plugins:",
     "  enabled:",
@@ -1595,8 +1596,14 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   assert.equal(enabled.code, 0, enabled.stderr);
   const installed = readFileSync(configPath, "utf8");
   assert.match(installed, /caveman:native-hermes-routing/);
-  assert.match(installed, /provider: "custom"/);
-  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"/);
+  // openai-codex is a named OAuth provider: rewriting it to the generic custom
+  // provider drops its credential and its codex_responses transport, which is
+  // the 401 in #1391. Keep the provider and use the proxy's ChatGPT handler,
+  // which takes its suffix verbatim (so no "/v1").
+  assert.match(installed, /provider: openai-codex/);
+  assert.doesNotMatch(installed, /provider: "custom"/);
+  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/chatgpt"/);
+  assert.match(installed, /api_mode: codex_responses/);
   assert.match(installed, /caveman_native/);
   assert.match(installed, /caveman-native/);
   const pluginDir = join(hermesHome, "plugins", "caveman_native");
@@ -1612,7 +1619,7 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   });
   assert.equal(compiled.status, 0, compiled.stderr);
   const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
-  assert.equal(journal.operations.find((operation) => operation.kind === "hermes-config").owned.route, "http://127.0.0.1:8787/w/hermes/v1");
+  assert.equal(journal.operations.find((operation) => operation.kind === "hermes-config").owned.route, "http://127.0.0.1:8787/chatgpt");
   const status = await run(["doctor", "hermes"], env);
   assert.equal(status.code, 0, status.stderr);
   assert.equal(JSON.parse(status.stdout).components.routing, true);
@@ -1629,6 +1636,39 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
   assert.equal(existsSync(pluginDir), false);
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+});
+
+test("enable/disable hermes rewrites an ordinary provider to the generic Caveman route", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+  // Not a named OAuth provider, so nothing to preserve: the generic route stands.
+  assert.match(installed, /provider: "custom"/);
+  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"/);
+  const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  assert.equal(journal.operations.find((operation) => operation.kind === "hermes-config").owned.route, "http://127.0.0.1:8787/w/hermes/v1");
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).components.routing, true);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /provider: openai/);
+  assert.match(restored, /base_url: https:\/\/api\.openai\.com\/v1/);
+  assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
 });
 
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
