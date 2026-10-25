@@ -8167,6 +8167,33 @@ function generatedArtifactTargetsExist(text: string): boolean {
   return tokens === undefined || invocationTargetsExist(tokens);
 }
 
+// Same question as managedHookTargetsExist below, asked of an MCP registration
+// instead of a hook: the recovery tool is only real while the command the host
+// will launch still exists and can be executed. probeMcpBinary() answers a
+// DIFFERENT question — whether some compatible caveman-mcp is resolvable on
+// this machine right now — so an install whose registered binary was removed,
+// or left non-executable, kept attesting recovery while an actual launch raised
+// FileNotFoundError or PermissionError (#1392). That is the MCP twin of the
+// disappearing hook/plugin targets in #1137.
+//
+// Existence and permission only: a registration may have been edited by the
+// user, and probing it must never run it, nor adopt it as owned. Registrations
+// journaled as config text (codex tables, the hermes mcp_servers block) carry
+// no structured command and are not inspected here.
+function journaledMcpTargetsExist(journal: NativeJournal | null | undefined): boolean {
+  for (const operation of journal?.operations ?? []) {
+    const installed = operation.owned?.installed_mcp;
+    if (!installed || typeof installed !== "object" || Array.isArray(installed)) continue;
+    const { command, args } = installed as { command?: unknown; args?: unknown };
+    const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    // claude: { command: "<bin>", args: [] } · gemini: { command, args }
+    // opencode: { type: "local", command: ["<bin>"] }
+    const tokens = Array.isArray(command) ? strings(command) : typeof command === "string" ? [command, ...strings(args)] : [];
+    if (tokens.length > 0 && !invocationTargetsExist(tokens)) return false;
+  }
+  return true;
+}
+
 // A managed hook is only healthy while the files its command runs still exist.
 // Identity is judged by basename, so a hook rendered into a directory that has
 // since been deleted (an nvm Node upgrade, #1137) kept matching the expected
@@ -11497,7 +11524,11 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     // Claude journals one route per profile; each has to be the current one.
     : agent === "pi" ? piBundleCurrent : Boolean(routeOperation) && journal!.operations.every((operation) => operation.kind !== routeKind || operation.owned?.route === expectedRoute));
   const proxyHealthy = wrapMode(gatewayURL()) === "managed" || Boolean(probeProxyVersion()?.capabilities.includes("native_runtime_v1"));
-  const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
+  // Recovery is real only when a current caveman-mcp is resolvable AND the
+  // command the host will actually launch still exists. Both the component
+  // below and this verdict read the one term, so they cannot disagree.
+  const mcpLaunchable = Boolean(mcp?.probe.current) && journaledMcpTargetsExist(journal);
+  const recoveryHealthy = agent === "aider" || mcpLaunchable;
   const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent || unwiredProfiles.length > 0 ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
   // Codex runs none of the hooks until the user trusts them; Core rides on them.
@@ -11532,7 +11563,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
     lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted,
     core: coreActive,
-    mcp_recovery: agent !== "aider" && ownedHealthy && Boolean(mcp?.probe.current),
+    mcp_recovery: agent !== "aider" && ownedHealthy && mcpLaunchable,
     // Codex is false for the same reason hermes is: no command rewrite happens.
     // Since #1037 shrinkHook declines every Codex tool event, so Codex gets no
     // shrink-hook entry; an older install's entry reads degraded until --fix.

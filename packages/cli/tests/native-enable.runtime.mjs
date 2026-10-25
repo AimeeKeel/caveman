@@ -2038,6 +2038,47 @@ test("status reports native OpenCode MCP recovery missing when its registration 
   assert.match(status.stdout, /^ {2}on {2}output .* degraded /m);
 });
 
+test("doctor stops attesting MCP recovery when the registered binary cannot launch (#1392)", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const registered = join(fx.home, "bin", "caveman-mcp");
+  // An equally valid second copy, resolvable through CAVEMAN_MCP_BIN. The
+  // global probe keeps succeeding on it, which is what made this invisible:
+  // it answers "some compatible binary exists here", not "the registered
+  // command can launch".
+  const other = join(fx.home, "bin", "caveman-mcp-b");
+  writeFileSync(other, readFileSync(registered), { mode: 0o755 });
+  chmodSync(other, 0o755);
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const healthy = JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout);
+  assert.equal(healthy.components.mcp_recovery, true, "a registration that can launch is recovery");
+  assert.equal(healthy.state, "installed");
+  const registration = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8")).mcp.caveman;
+
+  // The registration and its journal stay exactly as enable wrote them in both
+  // cases below; only the command they name stops being launchable.
+  const env = { ...fx.env, CAVEMAN_MCP_BIN: other };
+  for (const [label, breakIt] of [
+    ["missing", () => renameSync(registered, `${registered}.away`)],
+    ["not executable", () => { renameSync(`${registered}.away`, registered); chmodSync(registered, 0o644); }],
+  ]) {
+    breakIt();
+    const broken = JSON.parse((await run(["doctor", "opencode"], env)).stdout);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8")).mcp.caveman,
+      registration,
+      `${label}: doctor must not rewrite or adopt the registration`,
+    );
+    assert.equal(broken.components.mcp_recovery, false, `${label}: a registration that cannot launch is not recovery`);
+    assert.equal(broken.state, "degraded", `${label}: state must say so`);
+  }
+});
+
 test("status agrees with doctor on MCP recovery when only Gemini or only Pi is wired", async () => {
   for (const agent of ["gemini", "pi"]) {
     const fx = fixture();
