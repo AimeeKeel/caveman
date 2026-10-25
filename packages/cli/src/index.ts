@@ -20228,9 +20228,16 @@ function mem(rest: string[]) {
       // Same `--` end-of-options handling as remember: a replacement block that
       // opens with a `---` rule must survive verbatim instead of filtering empty.
       const rest2 = rest.slice(2);
+      // --stdin hands our stdin straight to cavemem, exactly as remember does,
+      // so a replacement bigger than one argv element (~128 KB on Linux,
+      // ~32 KB of whole command line on Windows) reaches the store at all.
+      if (id && rest2.length === 1 && rest2[0] === "--stdin") {
+        process.stdout.write(cavememRun(["supersede", id, "--stdin"], { stdin: true }) ?? "");
+        return;
+      }
       const sep = rest2.indexOf("--");
       const text = (sep >= 0 ? rest2.slice(sep + 1) : rest2.filter((a) => !a.startsWith("--"))).join(" ");
-      if (!id || !text) { console.error(`usage: ${invokedCommand("mem")} supersede <id> [--] <text>`); process.exit(2); }
+      if (!id || !text) { console.error(`usage: ${invokedCommand("mem")} supersede <id> [--] <text> | <id> --stdin`); process.exit(2); }
       process.stdout.write(cavememRun(["supersede", id, text]) ?? "");
       return;
     }
