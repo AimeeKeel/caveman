@@ -1580,6 +1580,7 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
     "model:",
     "  default: gpt-5.5",
     "  provider: openai-codex",
+    "  api_mode: codex_responses",
     "  base_url: https://chatgpt.com/backend-api/codex",
     "plugins:",
     "  enabled:",
@@ -1595,8 +1596,14 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   assert.equal(enabled.code, 0, enabled.stderr);
   const installed = readFileSync(configPath, "utf8");
   assert.match(installed, /caveman:native-hermes-routing/);
-  assert.match(installed, /provider: "custom"/);
-  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"/);
+  // openai-codex is a named OAuth provider: rewriting it to the generic custom
+  // provider drops its credential and its codex_responses transport, which is
+  // the 401 in #1391. Keep the provider and use the proxy's ChatGPT handler,
+  // which takes its suffix verbatim (so no "/v1").
+  assert.match(installed, /provider: openai-codex/);
+  assert.doesNotMatch(installed, /provider: "custom"/);
+  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/chatgpt"/);
+  assert.match(installed, /api_mode: codex_responses/);
   assert.match(installed, /caveman_native/);
   assert.match(installed, /caveman-native/);
   const pluginDir = join(hermesHome, "plugins", "caveman_native");
@@ -1612,7 +1619,7 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   });
   assert.equal(compiled.status, 0, compiled.stderr);
   const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
-  assert.equal(journal.operations.find((operation) => operation.kind === "hermes-config").owned.route, "http://127.0.0.1:8787/w/hermes/v1");
+  assert.equal(journal.operations.find((operation) => operation.kind === "hermes-config").owned.route, "http://127.0.0.1:8787/chatgpt");
   const status = await run(["doctor", "hermes"], env);
   assert.equal(status.code, 0, status.stderr);
   assert.equal(JSON.parse(status.stdout).components.routing, true);
@@ -1629,6 +1636,39 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
   assert.equal(existsSync(pluginDir), false);
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+});
+
+test("enable/disable hermes rewrites an ordinary provider to the generic Caveman route", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+  // Not a named OAuth provider, so nothing to preserve: the generic route stands.
+  assert.match(installed, /provider: "custom"/);
+  assert.match(installed, /base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"/);
+  const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  assert.equal(journal.operations.find((operation) => operation.kind === "hermes-config").owned.route, "http://127.0.0.1:8787/w/hermes/v1");
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).components.routing, true);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /provider: openai/);
+  assert.match(restored, /base_url: https:\/\/api\.openai\.com\/v1/);
+  assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
 });
 
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
@@ -1996,6 +2036,47 @@ test("status reports native OpenCode MCP recovery missing when its registration 
 
   // The broken registration degrades the wiring, and the grid says so.
   assert.match(status.stdout, /^ {2}on {2}output .* degraded /m);
+});
+
+test("doctor stops attesting MCP recovery when the registered binary cannot launch (#1392)", async () => {
+  const fx = fixture();
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const registered = join(fx.home, "bin", "caveman-mcp");
+  // An equally valid second copy, resolvable through CAVEMAN_MCP_BIN. The
+  // global probe keeps succeeding on it, which is what made this invisible:
+  // it answers "some compatible binary exists here", not "the registered
+  // command can launch".
+  const other = join(fx.home, "bin", "caveman-mcp-b");
+  writeFileSync(other, readFileSync(registered), { mode: 0o755 });
+  chmodSync(other, 0o755);
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const healthy = JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout);
+  assert.equal(healthy.components.mcp_recovery, true, "a registration that can launch is recovery");
+  assert.equal(healthy.state, "installed");
+  const registration = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8")).mcp.caveman;
+
+  // The registration and its journal stay exactly as enable wrote them in both
+  // cases below; only the command they name stops being launchable.
+  const env = { ...fx.env, CAVEMAN_MCP_BIN: other };
+  for (const [label, breakIt] of [
+    ["missing", () => renameSync(registered, `${registered}.away`)],
+    ["not executable", () => { renameSync(`${registered}.away`, registered); chmodSync(registered, 0o644); }],
+  ]) {
+    breakIt();
+    const broken = JSON.parse((await run(["doctor", "opencode"], env)).stdout);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8")).mcp.caveman,
+      registration,
+      `${label}: doctor must not rewrite or adopt the registration`,
+    );
+    assert.equal(broken.components.mcp_recovery, false, `${label}: a registration that cannot launch is not recovery`);
+    assert.equal(broken.state, "degraded", `${label}: state must say so`);
+  }
 });
 
 test("status agrees with doctor on MCP recovery when only Gemini or only Pi is wired", async () => {
